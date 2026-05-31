@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 verifications.db
 .pytest_cache/
+agent_wallet.json

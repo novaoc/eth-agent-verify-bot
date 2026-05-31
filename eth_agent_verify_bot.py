@@ -55,8 +55,14 @@ REGISTRY_ADDR = os.getenv("REGISTRY_ADDR") or None
 
 CHALLENGE_TTL_SEC = 300
 
-# Slash commands carry their own data — no privileged intents needed.
+# Slash commands carry their own data — no privileged intents needed for /verify
+# or /submit. Members intent lets admin `/sync_roles` (no member arg) find every
+# verified member in the guild without each having to interact first.
+# Enable members intent ONLY if the dev-portal toggle is on, otherwise discord.py
+# raises PrivilegedIntentsRequired at connect.
 intents = discord.Intents.default()
+if os.getenv("ENABLE_MEMBERS_INTENT", "").lower() in ("1", "true", "yes"):
+    intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Lazy-init: tests stub this out, and we don't want module import to require
@@ -458,6 +464,30 @@ class _ChallengeCopyView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="🤖 Copy prompt for my agent",
+        style=discord.ButtonStyle.primary,
+    )
+    async def agent_prompt(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        typed = build_typed_data(self._payload)
+        # Single fenced block so Discord renders one copy-on-hover affordance.
+        prompt = (
+            "Please sign the following EIP-712 typed data with the wallet that "
+            "controls your ERC-8004 agent. Use the eth_signTypedData_v4 standard. "
+            "Reply with ONLY the resulting hex signature — a single 0x-prefixed "
+            "string, no quotes, no extra words.\n\n"
+            "EIP-712 payload to sign:\n"
+            + json.dumps(typed, indent=2)
+        )
+        body = (
+            "Copy the whole block below and send it to your agent. It will "
+            "reply with a hex signature — paste that into `/submit signature:<0x…>`.\n"
+            "```\n" + prompt + "\n```"
+        )
+        await interaction.response.send_message(body, ephemeral=True)
+
+    @discord.ui.button(
         label="📋 Show raw typed data",
         style=discord.ButtonStyle.secondary,
     )
@@ -483,7 +513,11 @@ async def verify_cmd(interaction: discord.Interaction, agent: str):
     ref = parse_agent_ref(agent)
     if ref is None:
         await interaction.response.send_message(
-            "Couldn't parse agent. Use `eip155:8453:0x...:42` or a bare integer agentId.",
+            "Couldn't parse `agent`. Expected one of:\n"
+            "• `eip155:<chainId>:<registry>:<agentId>` "
+            f"(e.g. `eip155:{CHAIN_ID}:{REGISTRY_ADDR or '0x...'}:42`)\n"
+            "• A bare numeric `agentId` (uses this server's default registry)\n\n"
+            "Don't know your agent ID? Run `/start_verify` for a step-by-step guide.",
             ephemeral=True,
         )
         return
@@ -1008,6 +1042,40 @@ async def rule_list_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# ----- onboarding --------------------------------------------------------
+
+
+@bot.tree.command(
+    name="start_verify",
+    description="Walk me through verifying my ERC-8004 agent step-by-step.",
+)
+async def start_verify_cmd(interaction: discord.Interaction):
+    default_reg = REGISTRY_ADDR or "0x...your-registry..."
+    ask_agent_prompt = (
+        "What is your ERC-8004 agent identifier? Reply with ONLY the canonical "
+        "string in the form `eip155:<chainId>:<registry>:<agentId>` "
+        "(or just your numeric agent ID if I'm on the same registry as the "
+        "verifier bot). No other text."
+    )
+    msg = (
+        "**Verify your ERC-8004 agent — 3 steps**\n\n"
+        "**Step 1.** Ask your agent for its ERC-8004 identifier. "
+        "Copy this and send it to your agent:\n"
+        f"```\n{ask_agent_prompt}\n```\n"
+        "**Step 2.** Run `/verify` with what your agent gave you:\n"
+        f"```\n/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agent-id>\n```\n"
+        "If your agent is registered on this server's default registry "
+        f"(`{default_reg}`), you can pass just the numeric agent ID — "
+        "e.g. `/verify agent:42`.\n\n"
+        "**Step 3.** I'll reply with a one-block prompt for your agent. "
+        "Hit **🤖 Copy prompt for my agent**, send the block to your agent, "
+        "and it'll return a hex signature. Paste that into:\n"
+        "```\n/submit signature:0x...\n```\n"
+        "Done — you'll get the verified role."
+    )
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
 # ----- error handling ----------------------------------------------------
 
 
@@ -1023,7 +1091,7 @@ async def _on_app_error(
 
 
 for _cmd in (
-    verify_cmd, submit_cmd, whoami_cmd,
+    start_verify_cmd, verify_cmd, submit_cmd, whoami_cmd,
     rule_help_cmd, rule_add_cmd, rule_remove_cmd, rule_list_cmd,
     sync_me_cmd, sync_roles_cmd,
 ):
