@@ -61,7 +61,49 @@ GUILD_IDS = _parse_guild_ids(os.getenv("GUILD_ID"))
 # Back-compat: code paths that read a single guild id (e.g. config display)
 # pick the first entry, or None if global.
 GUILD_ID = GUILD_IDS[0] if GUILD_IDS else None
-VERIFIED_ROLE_ID = int(os.getenv("VERIFIED_ROLE_ID", "0")) or None
+def _parse_verified_role_ids(raw: str | None) -> tuple[int | None, dict[int, int]]:
+    """Return (single_default, per_guild_map).
+
+    Accepts either:
+      • bare int  → applies to every guild the bot serves
+      • guild:role,guild:role,...  → per-guild mapping
+    """
+    if not raw:
+        return None, {}
+    raw = raw.strip()
+    if raw.isdigit():
+        return int(raw), {}
+    mapping: dict[int, int] = {}
+    for piece in raw.split(","):
+        if ":" not in piece:
+            continue
+        g, r = piece.strip().split(":", 1)
+        g, r = g.strip(), r.strip()
+        if g.isdigit() and r.isdigit():
+            mapping[int(g)] = int(r)
+    return None, mapping
+
+
+_DEFAULT_VERIFIED_ROLE_ID, _VERIFIED_ROLE_BY_GUILD = _parse_verified_role_ids(
+    os.getenv("VERIFIED_ROLE_ID")
+)
+
+
+def verified_role_for(guild_id: int | str | None) -> int | None:
+    """Resolve the verified-role ID for a specific guild, falling back to the
+    bot-wide default if the guild has no explicit mapping."""
+    if guild_id is None:
+        return _DEFAULT_VERIFIED_ROLE_ID
+    try:
+        gid = int(guild_id)
+    except (TypeError, ValueError):
+        return _DEFAULT_VERIFIED_ROLE_ID
+    return _VERIFIED_ROLE_BY_GUILD.get(gid, _DEFAULT_VERIFIED_ROLE_ID)
+
+
+# Back-compat: any single-role code path still works when only the default
+# form is configured. None when only per-guild mappings are set.
+VERIFIED_ROLE_ID = _DEFAULT_VERIFIED_ROLE_ID
 DB_PATH = os.getenv("DB_PATH", "verifications.db")
 SIGN_PAGE_URL = os.getenv("SIGN_PAGE_URL") or None
 
@@ -357,8 +399,9 @@ def managed_role_ids(guild_id: str) -> set[str]:
     """Roles this bot is allowed to add/remove during sync. Roles outside
     this set were granted by another bot or admin and stay untouched."""
     ids = {role_id for _, _, _, role_id in list_role_rules(guild_id)}
-    if VERIFIED_ROLE_ID:
-        ids.add(str(VERIFIED_ROLE_ID))
+    role = verified_role_for(guild_id)
+    if role:
+        ids.add(str(role))
     return ids
 
 
@@ -411,8 +454,9 @@ async def compute_target_roles(
         facts.append(await fetch_agent_facts(ref))
         log.debug("owner=%s wallet=%s for agent=%s", owner, wallet, ref.agent_id)
     target = set(evaluate_rules(guild_id, facts))
-    if VERIFIED_ROLE_ID:
-        target.add(str(VERIFIED_ROLE_ID))
+    role = verified_role_for(guild_id)
+    if role:
+        target.add(str(role))
     return target
 
 
@@ -683,18 +727,21 @@ async def submit_cmd(interaction: discord.Interaction, signature: str):
     granted_lines: list[str] = []
     failed_lines: list[str] = []
 
-    if VERIFIED_ROLE_ID and isinstance(interaction.user, discord.Member):
+    guild_verified_role = verified_role_for(
+        interaction.guild.id if interaction.guild else None
+    )
+    if guild_verified_role and isinstance(interaction.user, discord.Member):
         role = (
-            interaction.guild.get_role(VERIFIED_ROLE_ID)
+            interaction.guild.get_role(guild_verified_role)
             if interaction.guild else None
         )
         if role:
             try:
                 await interaction.user.add_roles(role, reason="ERC-8004 agent verified")
-                granted_lines.append(f"<@&{VERIFIED_ROLE_ID}> (base verified role)")
+                granted_lines.append(f"<@&{guild_verified_role}> (base verified role)")
             except discord.Forbidden:
                 failed_lines.append(
-                    f"<@&{VERIFIED_ROLE_ID}> — bot lacks Manage Roles or sits below this role"
+                    f"<@&{guild_verified_role}> — bot lacks Manage Roles or sits below this role"
                 )
 
     if interaction.guild and isinstance(interaction.user, discord.Member):
