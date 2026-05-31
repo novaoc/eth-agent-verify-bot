@@ -726,6 +726,89 @@ async def whoami_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+@bot.tree.command(
+    name="my_agents",
+    description="Show your verified agents grouped by wallet, with on-chain balance.",
+)
+async def my_agents_cmd(interaction: discord.Interaction):
+    rows = list_verifications(str(interaction.user.id))
+    if not rows:
+        await interaction.response.send_message(
+            "No agents verified yet — run `/verify` (or `/start_verify` for "
+            "step-by-step). Registered on multiple wallets? Sign with each "
+            "wallet in turn — every successful `/verify` shows up here.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    # Group rows by signer wallet, preserving chain+registry+agent details.
+    by_wallet: dict[str, list[tuple[int, str, int, int]]] = {}
+    for chain_id, registry, agent_id, signer_addr, ts in rows:
+        by_wallet.setdefault(signer_addr, []).append((chain_id, registry, agent_id, ts))
+
+    # Check current on-chain status: balanceOf per wallet + ownerOf per agent.
+    # Concurrency keeps it snappy even with several agents.
+    async def _check_agent(chain_id: int, registry: str, agent_id: int, signer: str):
+        ref = AgentRef(chain_id=chain_id, registry=registry, agent_id=agent_id)
+        try:
+            owner = await asyncio.to_thread(_registry().owner_of, ref.agent_id)
+            wallet = await asyncio.to_thread(_registry().agent_wallet, ref.agent_id)
+        except Exception as e:
+            return ("err", str(e))
+        allowed = {owner.lower()}
+        if wallet:
+            allowed.add(wallet.lower())
+        return ("ok", signer.lower() in allowed)
+
+    async def _balance(addr: str) -> int | None:
+        try:
+            return await asyncio.to_thread(_registry().balance_of, addr)
+        except Exception:
+            return None
+
+    lines: list[str] = []
+    for wallet, agents in by_wallet.items():
+        bal = await _balance(wallet)
+        verified_count = len(agents)
+        if bal is None:
+            header = f"**Wallet** `{wallet}` — on-chain balance unavailable"
+        elif bal > verified_count:
+            header = (
+                f"**Wallet** `{wallet}` — **{verified_count} verified here, "
+                f"{bal} owned on-chain** ({bal - verified_count} unverified — "
+                f"run `/verify` to surface them)"
+            )
+        else:
+            header = f"**Wallet** `{wallet}` — {verified_count} verified, {bal} on-chain"
+        lines.append(header)
+
+        for chain_id, registry, agent_id, ts in agents:
+            status, info = await _check_agent(chain_id, registry, agent_id, wallet)
+            if status == "err":
+                tag = "⚠️ chain read failed"
+            elif info is True:
+                tag = "✅ still controlled"
+            else:
+                tag = "❌ transferred away"
+            lines.append(
+                f"  • `eip155:{chain_id}:{registry}:{agent_id}` — {tag} — <t:{ts}:R>"
+            )
+        lines.append("")
+
+    # Strip trailing blank.
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    body = "\n".join(lines)
+    # Discord ephemeral followup limit is 2000 chars for plain text — truncate
+    # defensively. Realistic verified counts will be far below this.
+    if len(body) > 1900:
+        body = body[:1900] + "\n…(truncated)"
+    await interaction.followup.send(body, ephemeral=True)
+
+
 # ----- role sync ---------------------------------------------------------
 
 
@@ -1071,9 +1154,66 @@ async def start_verify_cmd(interaction: discord.Interaction):
         "Hit **🤖 Copy prompt for my agent**, send the block to your agent, "
         "and it'll return a hex signature. Paste that into:\n"
         "```\n/submit signature:0x...\n```\n"
-        "Done — you'll get the verified role."
+        "Done — you'll get the verified role.\n\n"
+        "💡 **Agent not registered on-chain yet?** Run `/register_help` first."
     )
     await interaction.response.send_message(msg, ephemeral=True)
+
+
+@bot.tree.command(
+    name="register_help",
+    description="How to register an ERC-8004 agent on Base (wallet + funding + register call).",
+)
+async def register_help_cmd(interaction: discord.Interaction):
+    default_reg = REGISTRY_ADDR or "0x...your-registry..."
+    walkthrough = (
+        "**Register your ERC-8004 agent on Base — full setup**\n\n"
+        "**Step 0 — Need a wallet?** Skip if you already have one.\n"
+        "Pick any EVM wallet that supports Base (chainId 8453):\n"
+        "• **MetaMask** — <https://metamask.io>\n"
+        "• **Rabby** — <https://rabby.io>\n"
+        "• **Coinbase Wallet** — <https://www.coinbase.com/wallet>\n"
+        "After installing, write the 12-word recovery phrase on PAPER. "
+        "Never paste it into a website, never share it.\n\n"
+        "**Step 1 — Fund your wallet on Base.**\n"
+        "Registration costs only gas (~$0.01). Easy ways to get ETH on Base:\n"
+        "• **Coinbase / Binance / OKX** — withdraw ETH and pick network: **Base**\n"
+        "• **Bridge** — <https://superbridge.app> or <https://bridge.base.org>\n"
+        "• **On-ramp** — Coinbase Wallet has a built-in card/Apple Pay buy flow\n\n"
+        "**Step 2 — Call `register()` on the registry.**\n"
+        f"Contract: `{default_reg}` on Base (chainId {CHAIN_ID}).\n"
+        "Function: `register()` — no parameters, **non-payable** (no protocol fee, "
+        "just gas). Returns your `agentId`.\n"
+        f"Easiest: open <https://basescan.org/address/{default_reg}#writeProxyContract>, "
+        "connect your wallet, click `register`, confirm. After it mines, read the "
+        "**Registered** event in the receipt — the first indexed parameter is your "
+        "`agentId`.\n\n"
+        "**Step 3 — Verify here.**\n"
+        f"Run `/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agentId>` "
+        "(or just the bare number)."
+    )
+    agent_prompt = (
+        "Please register yourself as an ERC-8004 agent on Base mainnet.\n\n"
+        "1. Confirm your wallet has at least 0.0001 ETH on Base (chainId 8453). "
+        "If not, stop and request funding from the user.\n"
+        "2. Call function `register()` on the ERC-8004 Identity Registry:\n"
+        f"   - Address: {default_reg}\n"
+        f"   - chainId: {CHAIN_ID} (Base)\n"
+        "   - Signature: register() returns (uint256 agentId)\n"
+        "   - State mutability: nonpayable (gas only, no protocol fee)\n"
+        "3. After the tx is mined, parse the Registered event from the receipt:\n"
+        "   Registered(uint256 indexed agentId, string agentURI, address indexed owner)\n"
+        "   Your agentId is the indexed first parameter.\n"
+        "4. Reply with ONLY this single-line string (no quotes, no extra words):\n"
+        f"   eip155:{CHAIN_ID}:{default_reg}:<your-agentId>"
+    )
+    followup = (
+        "**🤖 Got an AI agent with wallet access?** Send it this and it'll "
+        "self-register, then reply with the identifier you paste into `/verify`:\n"
+        "```\n" + agent_prompt + "\n```"
+    )
+    await interaction.response.send_message(walkthrough, ephemeral=True)
+    await interaction.followup.send(followup, ephemeral=True)
 
 
 # ----- error handling ----------------------------------------------------
@@ -1091,7 +1231,8 @@ async def _on_app_error(
 
 
 for _cmd in (
-    start_verify_cmd, verify_cmd, submit_cmd, whoami_cmd,
+    start_verify_cmd, register_help_cmd, verify_cmd, submit_cmd,
+    whoami_cmd, my_agents_cmd,
     rule_help_cmd, rule_add_cmd, rule_remove_cmd, rule_list_cmd,
     sync_me_cmd, sync_roles_cmd,
 ):

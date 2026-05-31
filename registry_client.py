@@ -75,6 +75,20 @@ class RegistryClient:
             return None
         return uri or None
 
+    def balance_of(self, owner: str) -> int:
+        """ERC721 balanceOf — count of agents currently owned by `owner`."""
+        owner = Web3.to_checksum_address(owner)
+        # Inline ABI so we don't have to bake balanceOf into the bundled JSON.
+        c = self.w3.eth.contract(
+            address=self.registry_addr,
+            abi=[{
+                "type": "function", "name": "balanceOf", "stateMutability": "view",
+                "inputs": [{"name": "owner", "type": "address"}],
+                "outputs": [{"name": "", "type": "uint256"}],
+            }],
+        )
+        return int(c.functions.balanceOf(owner).call())
+
 
 async def fetch_agent_registration(token_uri: str) -> dict | None:
     """Fetch the ERC-8004 agent registration JSON. Handles `data:` URIs (some
