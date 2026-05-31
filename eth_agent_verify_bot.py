@@ -44,7 +44,23 @@ logging.basicConfig(
 log = logging.getLogger("eth-agent-verify-bot")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", "0")) or None
+def _parse_guild_ids(raw: str | None) -> list[int]:
+    """Accept a single int or a comma-separated list — operators can run the
+    same bot in multiple servers with instant slash-command sync to each."""
+    if not raw:
+        return []
+    out: list[int] = []
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if piece.isdigit():
+            out.append(int(piece))
+    return out
+
+
+GUILD_IDS = _parse_guild_ids(os.getenv("GUILD_ID"))
+# Back-compat: code paths that read a single guild id (e.g. config display)
+# pick the first entry, or None if global.
+GUILD_ID = GUILD_IDS[0] if GUILD_IDS else None
 VERIFIED_ROLE_ID = int(os.getenv("VERIFIED_ROLE_ID", "0")) or None
 DB_PATH = os.getenv("DB_PATH", "verifications.db")
 SIGN_PAGE_URL = os.getenv("SIGN_PAGE_URL") or None
@@ -425,16 +441,29 @@ async def on_ready():
     _db().close()
     if not REGISTRY_ADDR:
         log.warning("REGISTRY_ADDR unset — /verify will fail until configured")
-    try:
-        if GUILD_ID:
-            guild = discord.Object(id=GUILD_ID)
-            bot.tree.copy_global_to(guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-        else:
+    if GUILD_IDS:
+        ok = 0
+        for gid in GUILD_IDS:
+            try:
+                guild = discord.Object(id=gid)
+                bot.tree.copy_global_to(guild=guild)
+                synced = await bot.tree.sync(guild=guild)
+                log.info("Synced %d slash commands to guild %s", len(synced), gid)
+                ok += 1
+            except discord.Forbidden:
+                log.warning(
+                    "Guild %s: Missing Access — bot is not in this server yet. "
+                    "Invite it with the OAuth URL and restart to sync.", gid,
+                )
+            except Exception:
+                log.exception("Sync failed for guild %s", gid)
+        log.info("Slash command sync done: %d/%d guild(s)", ok, len(GUILD_IDS))
+    else:
+        try:
             synced = await bot.tree.sync()
-        log.info("Synced %d slash commands", len(synced))
-    except Exception:
-        log.exception("Slash command sync failed")
+            log.info("Synced %d slash commands globally", len(synced))
+        except Exception:
+            log.exception("Global slash command sync failed")
     await bot.change_presence(activity=discord.Game(name="/verify"))
 
 
