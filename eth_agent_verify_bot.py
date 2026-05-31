@@ -1162,58 +1162,62 @@ async def start_verify_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="register_help",
-    description="How to register an ERC-8004 agent on Base (wallet + funding + register call).",
+    description="Get a copy-paste prompt to send to your agent so it registers itself on Base.",
 )
 async def register_help_cmd(interaction: discord.Interaction):
     default_reg = REGISTRY_ADDR or "0x...your-registry..."
-    walkthrough = (
-        "**Register your ERC-8004 agent on Base — full setup**\n\n"
-        "**Step 0 — Need a wallet?** Skip if you already have one.\n"
-        "Pick any EVM wallet that supports Base (chainId 8453):\n"
-        "• **MetaMask** — <https://metamask.io>\n"
-        "• **Rabby** — <https://rabby.io>\n"
-        "• **Coinbase Wallet** — <https://www.coinbase.com/wallet>\n"
-        "After installing, write the 12-word recovery phrase on PAPER. "
-        "Never paste it into a website, never share it.\n\n"
-        "**Step 1 — Fund your wallet on Base.**\n"
-        "Registration costs only gas (~$0.01). Easy ways to get ETH on Base:\n"
-        "• **Coinbase / Binance / OKX** — withdraw ETH and pick network: **Base**\n"
-        "• **Bridge** — <https://superbridge.app> or <https://bridge.base.org>\n"
-        "• **On-ramp** — Coinbase Wallet has a built-in card/Apple Pay buy flow\n\n"
-        "**Step 2 — Call `register()` on the registry.**\n"
-        f"Contract: `{default_reg}` on Base (chainId {CHAIN_ID}).\n"
-        "Function: `register()` — no parameters, **non-payable** (no protocol fee, "
-        "just gas). Returns your `agentId`.\n"
-        f"Easiest: open <https://basescan.org/address/{default_reg}#writeProxyContract>, "
-        "connect your wallet, click `register`, confirm. After it mines, read the "
-        "**Registered** event in the receipt — the first indexed parameter is your "
-        "`agentId`.\n\n"
-        "**Step 3 — Verify here.**\n"
-        f"Run `/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agentId>` "
-        "(or just the bare number)."
-    )
     agent_prompt = (
-        "Please register yourself as an ERC-8004 agent on Base mainnet.\n\n"
-        "1. Confirm your wallet has at least 0.0001 ETH on Base (chainId 8453). "
-        "If not, stop and request funding from the user.\n"
-        "2. Call function `register()` on the ERC-8004 Identity Registry:\n"
-        f"   - Address: {default_reg}\n"
-        f"   - chainId: {CHAIN_ID} (Base)\n"
-        "   - Signature: register() returns (uint256 agentId)\n"
-        "   - State mutability: nonpayable (gas only, no protocol fee)\n"
-        "3. After the tx is mined, parse the Registered event from the receipt:\n"
-        "   Registered(uint256 indexed agentId, string agentURI, address indexed owner)\n"
-        "   Your agentId is the indexed first parameter.\n"
-        "4. Reply with ONLY this single-line string (no quotes, no extra words):\n"
-        f"   eip155:{CHAIN_ID}:{default_reg}:<your-agentId>"
+        "You are an AI agent. Your user wants to prove to a Discord server "
+        "that they control you. To do that, you need to register yourself on "
+        "the ERC-8004 Trustless Agents Identity Registry on Base mainnet. "
+        "Do the steps below in order and report progress to the user.\n\n"
+        "1. Wallet check.\n"
+        "   - If you can sign and broadcast Ethereum transactions on Base "
+        "(chainId 8453), continue.\n"
+        "   - If you cannot sign EVM transactions at all, stop and tell the "
+        "user what access you would need (an RPC endpoint, a signing key or "
+        "key-management API, the ability to broadcast a transaction).\n"
+        "   - If you can sign but have no wallet yet, generate a new EVM "
+        "keypair, store the private key durably, report the public address "
+        "to the user, and stop until they confirm it is funded.\n\n"
+        "2. Funding check.\n"
+        "   - Confirm the wallet holds at least 0.0001 ETH on Base mainnet "
+        "(chainId 8453). Registration is non-payable but you still pay gas "
+        "(~$0.01 today).\n"
+        "   - If underfunded, report the wallet address and the shortfall to "
+        "the user and stop. Suggested ways for them to fund it: withdraw ETH "
+        "from Coinbase / Binance / OKX with network set to Base, or bridge "
+        "via superbridge.app / bridge.base.org.\n\n"
+        "3. Register on-chain.\n"
+        f"   - Contract: {default_reg}\n"
+        f"   - chainId:  {CHAIN_ID} (Base)\n"
+        "   - Function: register() — no arguments, nonpayable, returns "
+        "(uint256 agentId).\n"
+        "   - Submit the transaction, wait for it to be mined, and confirm "
+        "status == 1.\n\n"
+        "4. Read your agentId.\n"
+        "   - In the receipt logs, find the Registered event:\n"
+        "       Registered(uint256 indexed agentId, string agentURI, "
+        "address indexed owner)\n"
+        "   - Your agentId is the first indexed parameter.\n\n"
+        "5. Report back.\n"
+        "   - Reply to the user with ONLY this single line, no quotes, no "
+        "markdown, no extra words:\n"
+        f"       eip155:{CHAIN_ID}:{default_reg}:<your-agentId>\n\n"
+        "If any step fails, report exactly which step, the error, and what "
+        "you need from the user to continue."
     )
-    followup = (
-        "**🤖 Got an AI agent with wallet access?** Send it this and it'll "
-        "self-register, then reply with the identifier you paste into `/verify`:\n"
-        "```\n" + agent_prompt + "\n```"
+    intro = (
+        "**This server gatekeeps on ERC-8004 agent ownership.** To join, "
+        "your **agent** has to register itself on Base — you don't do it by "
+        "hand. Copy the block in the next message and send it to your agent. "
+        "The agent will handle wallet, funding check, and the on-chain "
+        "`register()` call, then reply with its identifier. Paste that into "
+        "`/verify agent:<the-string>` to start verification."
     )
-    await interaction.response.send_message(walkthrough, ephemeral=True)
-    await interaction.followup.send(followup, ephemeral=True)
+    prompt_block = "```\n" + agent_prompt + "\n```"
+    await interaction.response.send_message(intro, ephemeral=True)
+    await interaction.followup.send(prompt_block, ephemeral=True)
 
 
 # ----- error handling ----------------------------------------------------
