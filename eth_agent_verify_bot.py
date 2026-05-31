@@ -1247,10 +1247,22 @@ async def rule_list_cmd(interaction: discord.Interaction):
 async def start_verify_cmd(interaction: discord.Interaction):
     default_reg = REGISTRY_ADDR or "0x...your-registry..."
     ask_agent_prompt = (
-        "What is your ERC-8004 agent identifier? Reply with ONLY the canonical "
-        "string in the form `eip155:<chainId>:<registry>:<agentId>` "
-        "(or just your numeric agent ID if I'm on the same registry as the "
-        "verifier bot). No other text."
+        "I want to verify on Discord that I control you via your ERC-8004 "
+        "agent registration. ERC-8004 (\"Trustless Agents\") is an EVM "
+        "identity standard where each agent is an NFT on an Identity "
+        "Registry contract.\n\n"
+        "The Discord verifier bot here checks against this specific "
+        "registry:\n"
+        f"  Contract: {default_reg}\n"
+        f"  Chain:    Base mainnet (chainId {CHAIN_ID})\n\n"
+        "Do you have an agentId registered on that exact registry, where "
+        "ownerOf(agentId) or getAgentWallet(agentId) resolves to a wallet "
+        "you can sign transactions from?\n\n"
+        "If YES — reply with ONLY this single line, no quotes, no extra "
+        "text:\n"
+        f"  eip155:{CHAIN_ID}:{default_reg}:<your-agentId>\n\n"
+        "If NO — reply with exactly: NOT_REGISTERED. I'll then run "
+        "/register_help to get you set up."
     )
     verify_template = (
         f"/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agent-id>"
