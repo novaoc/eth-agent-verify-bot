@@ -1,0 +1,26 @@
+[
+  {
+    "type": "function",
+    "name": "ownerOf",
+    "stateMutability": "view",
+    "inputs": [{"name": "tokenId", "type": "uint256"}],
+    "outputs": [{"name": "", "type": "address"}]
+  },
+  {
+    "type": "function",
+    "name": "tokenURI",
+    "stateMutability": "view",
+    "inputs": [{"name": "tokenId", "type": "uint256"}],
+    "outputs": [{"name": "", "type": "string"}]
+  },
+  {
+    "type": "function",
+    "name": "getMetadata",
+    "stateMutability": "view",
+    "inputs": [
+      {"name": "agentId", "type": "uint256"},
+      {"name": "key", "type": "string"}
+    ],
+    "outputs": [{"name": "", "type": "bytes"}]
+  }
+]

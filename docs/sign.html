@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>ETH Agent Verify — Sign Challenge</title>
+  <link rel="stylesheet" href="https://unpkg.com/98.css">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #008080;
+      padding: 1rem 1rem 56px;
+      font-family: "Pixelated MS Sans Serif", "MS Sans Serif", Arial, sans-serif;
+    }
+    .desk { display: flex; justify-content: center; padding-top: 1rem; }
+    .window { width: 100%; max-width: 620px; }
+    .window-body { padding: 12px; }
+    .readout {
+      background: #fff;
+      border: 1px inset #c0c0c0;
+      padding: 6px 8px;
+      font-family: "Lucida Console", "Courier New", monospace;
+      font-size: 11px;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+      min-height: 1.2em;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    button { width: 100%; min-height: 36px; font-size: 14px; }
+    .status { font-size: 12px; margin-top: 8px; min-height: 1.2em; }
+    .status.ok { color: #006400; font-weight: bold; }
+    .status.err { color: #800000; font-weight: bold; }
+    .hidden { display: none; }
+    .footer-bar {
+      margin-top: 1.5rem;
+      text-align: center;
+      color: #c0c0c0;
+      font-size: 11px;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .footer-bar a { color: #fff; text-decoration: underline; }
+    .taskbar {
+      position: fixed; bottom: 0; left: 0; right: 0; height: 28px;
+      background: #c0c0c0; border-top: 2px solid #fff;
+      display: flex; align-items: center; padding: 2px 4px;
+    }
+    .taskbar .start {
+      height: 22px; padding: 0 8px; font-weight: bold; font-size: 11px;
+      background: #c0c0c0;
+      border-top: 1px solid #fff; border-left: 1px solid #fff;
+      border-right: 1px solid #808080; border-bottom: 1px solid #808080;
+    }
+    .taskbar .clock {
+      margin-left: auto; padding: 2px 8px; font-size: 11px;
+      border-top: 1px solid #808080; border-left: 1px solid #808080;
+      border-right: 1px solid #fff; border-bottom: 1px solid #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="desk">
+    <div class="window">
+      <div class="title-bar">
+        <div class="title-bar-text">⚙ ETH Agent Verify — Sign Challenge</div>
+        <div class="title-bar-controls">
+          <button aria-label="Minimize" disabled></button>
+          <button aria-label="Maximize" disabled></button>
+          <button aria-label="Close" onclick="history.back()"></button>
+        </div>
+      </div>
+      <div class="window-body">
+        <div id="warn" class="hidden">
+          <div role="alert" style="background:#ffdddd;border:1px solid #800000;padding:8px;margin-bottom:12px;font-size:12px;color:#800000">
+            ⚠️ Missing <code>typed</code> in URL. This page should be opened from the Discord bot.
+          </div>
+        </div>
+
+        <fieldset>
+          <legend>EIP-712 typed data</legend>
+          <div id="typed" class="readout">…</div>
+        </fieldset>
+
+        <div class="actions">
+          <button id="sign" class="default">🔐 Sign with my wallet</button>
+        </div>
+        <p class="status" id="status">
+          Click to invoke MetaMask / Rabby / WalletConnect-injected wallet.
+        </p>
+
+        <fieldset id="result-card" class="hidden" style="margin-top:14px">
+          <legend>Signature</legend>
+          <div id="sig" class="readout"></div>
+          <div class="actions">
+            <button id="copy">📋 Copy signature</button>
+          </div>
+          <p class="status">
+            Switch back to Discord and run <code>/submit signature:&lt;paste&gt;</code>.
+          </p>
+        </fieldset>
+      </div>
+
+      <div class="status-bar">
+        <p class="status-bar-field">v1</p>
+        <p class="status-bar-field">EIP-712</p>
+        <p class="status-bar-field" id="chainfield">chain ?</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    open-source · <a href="#">github</a>
+  </div>
+
+  <div class="taskbar">
+    <div class="start">⊞ Start</div>
+    <div class="clock" id="clock">--:--</div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const typedRaw = params.get("typed") || "";
+
+    let typed = null;
+    try {
+      typed = JSON.parse(typedRaw);
+    } catch (e) {
+      typed = null;
+    }
+
+    if (!typed) {
+      $("warn").classList.remove("hidden");
+      $("sign").disabled = true;
+      $("typed").textContent = "(none)";
+    } else {
+      $("typed").textContent = JSON.stringify(typed, null, 2);
+      if (typed.domain && typed.domain.chainId) {
+        $("chainfield").textContent = "chain " + typed.domain.chainId;
+      }
+    }
+
+    const clk = $("clock");
+    const tick = () => {
+      const d = new Date();
+      clk.textContent =
+        String(d.getHours()).padStart(2, "0") + ":" +
+        String(d.getMinutes()).padStart(2, "0");
+    };
+    tick();
+    setInterval(tick, 30_000);
+
+    $("sign").addEventListener("click", async () => {
+      const status = $("status");
+      $("sign").disabled = true;
+      status.className = "status";
+      status.textContent = "Asking your wallet…";
+
+      const eth = window.ethereum;
+      if (!eth) {
+        status.className = "status err";
+        status.innerHTML =
+          "❌ No injected wallet. Install " +
+          "<a href='https://metamask.io'>MetaMask</a>, " +
+          "<a href='https://rabby.io'>Rabby</a>, or open in a wallet-enabled browser.";
+        $("sign").disabled = false;
+        return;
+      }
+
+      try {
+        const [from] = await eth.request({ method: "eth_requestAccounts" });
+        const sig = await eth.request({
+          method: "eth_signTypedData_v4",
+          params: [from, JSON.stringify(typed)],
+        });
+        $("sig").textContent = sig;
+        $("result-card").classList.remove("hidden");
+        status.className = "status ok";
+        status.textContent = "✅ Signed by " + from + ". Copy below and paste into /submit.";
+        $("result-card").scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        const txt = (e && (e.message || e.toString())) || "Unknown error";
+        status.className = "status err";
+        status.textContent = "❌ " + txt;
+        $("sign").disabled = false;
+      }
+    });
+
+    $("copy").addEventListener("click", async () => {
+      const btn = $("copy");
+      try {
+        await navigator.clipboard.writeText($("sig").textContent);
+        btn.textContent = "✓ Copied to clipboard";
+        setTimeout(() => (btn.textContent = "📋 Copy signature"), 2000);
+      } catch {
+        btn.textContent = "Couldn't copy — long-press the signature above";
+      }
+    });
+  </script>
+</body>
+</html>
