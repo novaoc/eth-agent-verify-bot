@@ -514,6 +514,42 @@ async def on_ready():
 # ----- slash commands ----------------------------------------------------
 
 
+class _CopyButton(discord.ui.Button):
+    """Reveals a single payload in an ephemeral fenced block — gives mobile
+    users a focused long-press target instead of a giant scroll of text."""
+
+    def __init__(
+        self, label: str, payload: str, *,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        emoji: str | None = None, lang: str = "",
+    ):
+        super().__init__(label=label, style=style, emoji=emoji)
+        self._payload = payload
+        self._lang = lang
+
+    async def callback(self, interaction: discord.Interaction):
+        body = f"```{self._lang}\n{self._payload}\n```"
+        # 1990 keeps headroom for fence + lang tag on the 2000-char limit.
+        if len(body) > 1990:
+            body = body[:1990] + "\n…(truncated)\n```"
+        await interaction.response.send_message(body, ephemeral=True)
+
+
+class _CopyPromptView(discord.ui.View):
+    """Container view that exposes one _CopyButton per labeled payload."""
+
+    def __init__(
+        self,
+        items: list[tuple[str, str]] | list[tuple[str, str, dict]],
+        *, timeout: float = 900,
+    ):
+        super().__init__(timeout=timeout)
+        for it in items:
+            label, payload = it[0], it[1]
+            opts: dict = it[2] if len(it) >= 3 and isinstance(it[2], dict) else {}
+            self.add_item(_CopyButton(label, payload, **opts))
+
+
 class _ChallengeCopyView(discord.ui.View):
     """Buttons attached to /verify. If SIGN_PAGE_URL is set, a link button
     opens a static page that builds the EIP-712 payload and invokes
@@ -1216,24 +1252,28 @@ async def start_verify_cmd(interaction: discord.Interaction):
         "(or just your numeric agent ID if I'm on the same registry as the "
         "verifier bot). No other text."
     )
+    verify_template = (
+        f"/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agent-id>"
+    )
+    submit_template = "/submit signature:0x..."
+
     msg = (
         "**Verify your ERC-8004 agent — 3 steps**\n\n"
-        "**Step 1.** Ask your agent for its ERC-8004 identifier. "
-        "Copy this and send it to your agent:\n"
-        f"```\n{ask_agent_prompt}\n```\n"
-        "**Step 2.** Run `/verify` with what your agent gave you:\n"
-        f"```\n/verify agent:eip155:{CHAIN_ID}:{default_reg}:<your-agent-id>\n```\n"
-        "If your agent is registered on this server's default registry "
-        f"(`{default_reg}`), you can pass just the numeric agent ID — "
-        "e.g. `/verify agent:42`.\n\n"
-        "**Step 3.** I'll reply with a one-block prompt for your agent. "
-        "Hit **🤖 Copy prompt for my agent**, send the block to your agent, "
-        "and it'll return a hex signature. Paste that into:\n"
-        "```\n/submit signature:0x...\n```\n"
-        "Done — you'll get the verified role.\n\n"
+        "**1.** Ask your agent for its ERC-8004 identifier — tap the button "
+        "below and long-press the message to copy.\n"
+        "**2.** Run `/verify` with what it gave you. If your agent is on this "
+        f"server's default registry (`{default_reg}`), you can pass just the "
+        "numeric agent ID (e.g. `/verify agent:42`).\n"
+        "**3.** I'll reply with a single block to send to your agent. It will "
+        "return a hex signature. Paste it into `/submit`. You're verified.\n\n"
         "💡 **Agent not registered on-chain yet?** Run `/register_help` first."
     )
-    await interaction.response.send_message(msg, ephemeral=True)
+    view = _CopyPromptView([
+        ("Ask agent for ID", ask_agent_prompt, {"emoji": "📝", "style": discord.ButtonStyle.primary}),
+        ("/verify template", verify_template, {"emoji": "🔍"}),
+        ("/submit template", submit_template, {"emoji": "📤"}),
+    ])
+    await interaction.response.send_message(msg, view=view, ephemeral=True)
 
 
 @bot.tree.command(
@@ -1286,14 +1326,18 @@ async def register_help_cmd(interaction: discord.Interaction):
     intro = (
         "**This server gatekeeps on ERC-8004 agent ownership.** To join, "
         "your **agent** has to register itself on Base — you don't do it by "
-        "hand. Copy the block in the next message and send it to your agent. "
-        "The agent will handle wallet, funding check, and the on-chain "
-        "`register()` call, then reply with its identifier. Paste that into "
-        "`/verify agent:<the-string>` to start verification."
+        "hand.\n\n"
+        "Tap **🤖 Registration prompt for my agent** below, long-press the "
+        "block to copy, and send it to your agent. It will handle wallet, "
+        "funding check, and the on-chain `register()` call, then reply with "
+        "its identifier. Paste that into `/verify agent:<the-string>` to "
+        "start verification."
     )
-    prompt_block = "```\n" + agent_prompt + "\n```"
-    await interaction.response.send_message(intro, ephemeral=True)
-    await interaction.followup.send(prompt_block, ephemeral=True)
+    view = _CopyPromptView([
+        ("Registration prompt for my agent", agent_prompt,
+         {"emoji": "🤖", "style": discord.ButtonStyle.primary}),
+    ])
+    await interaction.response.send_message(intro, view=view, ephemeral=True)
 
 
 # ----- error handling ----------------------------------------------------
